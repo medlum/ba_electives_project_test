@@ -34,6 +34,7 @@ Guarantees:
 from __future__ import annotations
 
 import heapq
+import random
 import re
 import unicodedata
 from collections import Counter
@@ -492,9 +493,15 @@ def load_responses(
         )
     )
 
+    # student_no_col = (
+    #    _find_column(df, ["student", "number"])
+    #    or _find_column(df, ["student", "id"])
+    # )
+
+    # ---- to find Email column in revised MS form to parse student ID ---#
     student_no_col = (
-        _find_column(df, ["student", "number"])
-        or _find_column(df, ["student", "id"])
+        _find_column(df, ["Email"])
+        or _find_column(df, ["email"])
     )
 
     course_col = (
@@ -554,9 +561,18 @@ def load_responses(
         )
 
         # Remove optional leading S if present, e.g. S10268590K.
+        # if student_number:
+        #    student_number = re.sub(
+        #        r"^S(?=[0-9])",
+        #        "",
+        #        student_number,
+        #        flags=re.IGNORECASE,
+        #    )
+
+        # ----parse student ID from email-----#
         if student_number:
             student_number = re.sub(
-                r"^S(?=[0-9])",
+                r"^S|@connect\.np\.edu\.sg$",
                 "",
                 student_number,
                 flags=re.IGNORECASE,
@@ -826,6 +842,96 @@ def _build_lexicographic_rank_costs(
 
 
 # ---------------------------------------------------------------------------
+# Create lottery priorities
+# ---------------------------------------------------------------------------
+def _build_tie_break_priorities(
+    students: List[Student],
+    seed: int,
+    mode: str = "random",
+) -> Dict[str, int]:
+    """
+    Build a small integer priority for tie-breaking.
+
+    Lower cost = higher priority.
+
+    Modes:
+        "none":
+            No explicit tie-break priority.
+        "alphabetical":
+            Deterministic alphabetical priority by name, then student number.
+        "random":
+            Seeded random lottery. Stable IDs are sorted alphabetically before
+            shuffling so the result is independent of Excel row order.
+    """
+    if not students:
+        return {}
+
+    if mode == "none":
+        return {s.key: 0 for s in students}
+
+    if mode == "alphabetical":
+        ordered = sorted(
+            students,
+            key=lambda s: (
+                (s.name or "").strip().lower(),
+                (s.student_number or "").strip().upper(),
+                s.key,
+            ),
+        )
+        return {s.key: i for i, s in enumerate(ordered)}
+
+    if mode == "alphabetical_rotation":
+        ordered = sorted(
+            students,
+            key=lambda s: (
+                (s.name or "").strip().lower(),
+                (s.student_number or "").strip().upper(),
+                s.key,
+            ),
+        )
+
+        if not ordered:
+            return {}
+
+        cut = int(seed) % len(ordered)
+        rotated = ordered[cut:] + ordered[:cut]
+
+        return {s.key: i for i, s in enumerate(rotated)}
+
+    # ------------------------------------------------------------------
+    # Random lottery
+    # ------------------------------------------------------------------
+    # Use student number where possible. If missing, fall back to internal key.
+    stable_ids = []
+    seen = set()
+
+    for s in students:
+        stable_id = (s.student_number or "").strip().upper() or s.key
+        if stable_id not in seen:
+            seen.add(stable_id)
+            stable_ids.append(stable_id)
+
+    # Sort alphabetically before shuffling so that the lottery does not
+    # depend on the order of rows in the uploaded Excel file.
+    stable_ids.sort()
+
+    rng = random.Random(seed)
+    rng.shuffle(stable_ids)
+
+    priority_by_id = {
+        stable_id: position
+        for position, stable_id in enumerate(stable_ids)
+    }
+
+    priorities: Dict[str, int] = {}
+    for s in students:
+        stable_id = (s.student_number or "").strip().upper() or s.key
+        priorities[s.key] = priority_by_id.get(stable_id, 0)
+
+    return priorities
+
+
+# ---------------------------------------------------------------------------
 # Allocation engine
 # ---------------------------------------------------------------------------
 
@@ -836,6 +942,7 @@ def allocate_students(
     classes_by_elective: Dict[str, int],
     max_class_size: int = DEFAULT_MAX_CLASS_SIZE,
     seed: int = 2026,
+    tie_breaker: str = "random",
 ) -> AllocationResult:
     """
     Allocate electives to students using minimum-cost maximum-flow.
@@ -868,13 +975,18 @@ def allocate_students(
         Retained for backward compatibility with previous UI. The optimizer is
         deterministic for a given input order and does not require a seed.
 
+    tie_breaker:
+        tie_break = "random"
+        tie_break = "alphabetical"
+        tie_break = "none"
+
     Returns
     -------
     AllocationResult
         Contains assignment rows, elective summary, metrics, and warnings.
     """
     # Seed is retained for API compatibility with earlier versions.
-    _ = seed
+    # _ = seed
 
     warnings: List[str] = []
 
@@ -935,6 +1047,16 @@ def allocate_students(
         selected_students,
         key=lambda s: (s.course_code or "", s.student_number or s.name),
     )
+
+    # Build explicit tie-break priorities.
+    # Lower number = higher priority.
+    priority_by_student = _build_tie_break_priorities(
+        selected_students,
+        seed=seed,
+        mode=tie_breaker,
+    )
+
+    max_priority = max(priority_by_student.values(), default=0)
 
     if not selected_students:
         warnings.append(
@@ -1044,6 +1166,10 @@ def allocate_students(
         max_possible_assignments=max_possible_assignments,
     )
 
+    if max_priority > 0:
+        tie_break_multiplier = max_possible_assignments * max_priority + 1
+        rank_costs = [cost * tie_break_multiplier for cost in rank_costs]
+
     # Student -> elective edges.
     assignment_edges: List[Tuple[str, str, _Edge]] = []
 
@@ -1056,7 +1182,11 @@ def allocate_students(
         student_node = student_offset + i
 
         # Source -> student edge.
-        mcmf.add_edge(source, student_node, source_cap, 0)
+        # mcmf.add_edge(source, student_node, source_cap, 0)
+        # Source -> student edge.
+        # The student tie-break priority is applied per allocated module slot.
+        priority_cost = priority_by_student.get(s.key, 0)
+        mcmf.add_edge(source, student_node, source_cap, priority_cost)
 
         # Student -> elective edges.
         #
@@ -1179,6 +1309,7 @@ def allocate_students(
                 "Unmet Demand": max(0, quota - len(assigned)),
                 "Allocated Electives": "; ".join(assigned),
                 "Allocated Preference Ranks": ranks_text,
+                "Lottery Priority": priority_by_student.get(s.key, ""),
                 "Student Warnings": "; ".join(s.warnings),
             }
         )

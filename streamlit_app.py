@@ -90,6 +90,22 @@ def make_sample_df() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
+
+    st.header("Checklist & Rules")
+    # --- ADD THIS BLOCK ---
+    with st.expander("*Read here*", expanded=False):
+        st.markdown("""
+        This app allocates students to business elective modules based on their
+        MS Forms preference ranking. Before uploading your data, please ensure:
+        
+        1. **Manual Excel Cleanup:** If certain courses (e.g., BS) are not eligible for specific electives, you **must manually remove** those electives from the students' rankings in the Excel file before uploading.
+        2. **Column Names:** Do NOT change the column names in the MS Form or Excel export (e.g., *ID, Start time, Email, Name, Please select your Diploma/Course*, etc.).
+        3. **Elective Names:** Do NOT change the names of the electives in the file. They must match the system exactly.
+        4. **MS Form Settings:** Ensure the form is restricted to *"Only people in Ngee Ann Polytechnic"*, *"Record Name"*, and *"One response per person"*.
+        """)
+    st.divider()
+    # ----------------------
+
     st.header("1. Data source")
 
     uploaded_file = st.file_uploader(
@@ -119,15 +135,31 @@ with st.sidebar:
 
     st.header("3. Allocation settings")
 
-    seed = st.number_input(
-        "Tie-break seed",
-        min_value=0,
-        max_value=999_999,
-        value=2026,
-        step=1,
+    # seed = st.number_input(
+    #    "Tie-break seed",
+    #    min_value=0,
+    #    max_value=999_999,
+    #    value=2026,
+    #    step=1,
+    #    help=(
+    #        "Deterministic tie-breaker for oversubscribed electives. "
+    #        "Change this to produce a different fair tie-break outcome."
+    #    ),
+    # )
+
+    tie_break = st.radio(
+        "Tie-break method",
+        options=["random", "alphabetical", "alphabetical_rotation", "none"],
+        format_func=lambda x: {
+            "random": "Random lottery",
+            "alphabetical": "Alphabetical by name/student number",
+            "alphabetical_rotation": "Alphabetical rotation by seed",
+            "none": "No explicit tie-break",
+        }[x],
+        index=0,
         help=(
-            "Deterministic tie-breaker for oversubscribed electives. "
-            "Change this to produce a different fair tie-break outcome."
+            "Default to Random lottery"
+
         ),
     )
 
@@ -262,7 +294,8 @@ if allocate_clicked:
         course_module_quota=course_module_quota,
         classes_by_elective=classes_by_elective,
         max_class_size=logic.DEFAULT_MAX_CLASS_SIZE,
-        seed=int(seed),
+        # seed=int(seed),
+        tie_breaker=tie_break,
     )
 
     st.session_state.result = result
