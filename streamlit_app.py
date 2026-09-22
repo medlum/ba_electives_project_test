@@ -91,9 +91,9 @@ def make_sample_df() -> pd.DataFrame:
 
 with st.sidebar:
 
-    st.header("Checklist & Rules")
+    st.header("Checklist & Allocation Process")
     # --- ADD THIS BLOCK ---
-    with st.expander("*Read here*", expanded=False):
+    with st.expander("*Read checklist*", expanded=False):
         st.markdown("""
         This app allocates students to business elective modules based on their
         MS Forms preference ranking. Before uploading your data, please ensure:
@@ -103,7 +103,26 @@ with st.sidebar:
         3. **Elective Names:** Do NOT change the names of the electives in the file. They must match the system exactly.
         4. **MS Form Settings:** Ensure the form is restricted to *"Only people in Ngee Ann Polytechnic"*, *"Record Name"*, and *"One response per person"*.
         """)
+
+    with st.expander("*Read allocation process*", expanded=False):
+
+        """
+
+        The system uses a two-step allocation process:
+
+        1. **Maximise the number of elective places allocated**
+        - The system first tries to allocate as many elective module places as possible, subject to:
+            - the number of modules a student is allowed to take;
+            - the student's submitted preferences;
+            - the available capacity for each elective.
+        - This means the system prioritises filling available elective places before considering which preference rank is better.
+        2. **Optimise students' preferences**
+        -  Once the maximum possible number of elective places has been determined, the system then considers students' preference rankings.
+        - It first tries to maximise the number of Rank 1 allocations.
+        - If there are still different possible allocations with the same number of Rank 1 allocations, it then considers Rank 2, followed by Rank 3, and so on.
+        """
     st.divider()
+
     # ----------------------
 
     st.header("1. Data source")
